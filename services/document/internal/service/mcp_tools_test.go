@@ -839,6 +839,18 @@ func TestMCPToolServiceReadReportFileValidationAndUnsupportedContent(t *testing.
 	if unsupported.Status != documentMCPToolResultFailed || unsupported.Error == nil || unsupported.Error.Code != string(CodeConflict) {
 		t.Fatalf("unsupported content result = %+v", unsupported)
 	}
+
+	nilContentSvc := NewMCPToolService(MCPToolServiceConfig{
+		ReportFileSvc: &fakeMCPReportFileService{
+			readContent: FileContent{Filename: "missing.docx", ContentType: docxContentType},
+		},
+		Recorder: &fakeMCPOperationRecorder{},
+	})
+	nilContent := nilContentSvc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-nil-content"},
+		DocumentMCPToolReadReportFile, json.RawMessage(`{"reportFileId":"rf-missing-content"}`))
+	if nilContent.Status != documentMCPToolResultFailed || nilContent.Error == nil || nilContent.Error.Code != string(CodeDependency) {
+		t.Fatalf("nil content result = %+v", nilContent)
+	}
 }
 
 func largeDOCXWithText(t *testing.T, text string) []byte {

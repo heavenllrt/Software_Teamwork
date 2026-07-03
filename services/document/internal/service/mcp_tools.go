@@ -806,6 +806,12 @@ func (s *MCPToolService) readReportFile(ctx context.Context, reqCtx RequestConte
 		s.recordToolCall(ctx, reqCtx, result, readReportFileParameterSummary(args, 0, false))
 		return result
 	}
+	if content.Content == nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(NewError(CodeDependency, "report file content is not available", nil))
+		s.recordToolCall(ctx, reqCtx, result, readReportFileParameterSummary(args, 0, false))
+		return result
+	}
 	defer content.Content.Close()
 
 	text, truncated, err := readSafeReportFileText(content)
