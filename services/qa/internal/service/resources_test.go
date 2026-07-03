@@ -19,6 +19,12 @@ func TestDefaultAgentConfigEnablesAttachmentSearch(t *testing.T) {
 	if !containsString(config.EnabledToolNames, "document__generate_report_from_content") {
 		t.Fatalf("enabledToolNames=%v, want document__generate_report_from_content", config.EnabledToolNames)
 	}
+	if !containsString(config.EnabledToolNames, "document__list_reports") {
+		t.Fatalf("enabledToolNames=%v, want document__list_reports", config.EnabledToolNames)
+	}
+	if !containsString(config.EnabledToolNames, "document__read_report_file") {
+		t.Fatalf("enabledToolNames=%v, want document__read_report_file", config.EnabledToolNames)
+	}
 }
 
 func TestReportGenerationDirectiveMentionsContentReportTool(t *testing.T) {

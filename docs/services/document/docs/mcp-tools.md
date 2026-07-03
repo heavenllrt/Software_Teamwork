@@ -213,3 +213,101 @@ go test ./internal/platform/mcpclient -run '^TestDocumentMCPReportToolsSmoke$' -
 该行的 `tool_count`、`last_connected_at` 或安全错误摘要。失败时用同一
 `X-Request-Id` 对照 `.local/logs/qa.log` 与 `.local/logs/document.log`，不要把 token 或
 完整工具参数写入 issue/日志。
+
+## C-025 Current Document MCP Query And Read Tools
+
+This section records the current contract added by C-025. The implementation
+authority is `services/document/internal/service/mcp_tools.go`; QA exposes these
+tools through the `document__` alias prefix.
+
+### Implemented P1 Tools
+
+| Model-facing name | Service tool name | Purpose |
+| --- | --- | --- |
+| `document__list_reports` | `list_reports` | Query reports with optional `reportType` and `status` filters. |
+| `document__get_report` | `get_report` | Read detailed safe report metadata by `reportId`. |
+| `document__list_materials` | `list_materials` | Query report materials with optional `category` filter. |
+| `document__get_material` | `get_material` | Read safe material metadata by `materialId`. |
+| `document__list_report_files` | `list_report_files` | List generated report files for a `reportId`. |
+| `document__read_report_file` | `read_report_file` | Read a generated report file as bounded `text` or `markdown`. |
+
+`list_reports` input:
+
+```json
+{
+  "reportType": "summer_peak_inspection",
+  "status": "generated",
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+Response fields include `reports`, `totalCount`, `page`, and `pageSize`.
+Each report summary exposes business metadata only: `id`, `name`,
+`reportType`, `templateId`, `topic`, `status`, latest job/file IDs, and safe
+timestamps.
+
+`get_report` input:
+
+```json
+{ "reportId": "report-id" }
+```
+
+`list_materials` input:
+
+```json
+{ "category": "inspection", "page": 1, "pageSize": 20 }
+```
+
+`get_material` input:
+
+```json
+{ "materialId": "material-id" }
+```
+
+Material results include `id`, `materialName`, `materialType`, `category`,
+`filename`, `fileSize`, `description`, `tags`, `enabled`, and safe timestamps.
+They must not expose `fileRef`, object keys, storage URLs, buckets, or internal
+File Service IDs.
+
+`list_report_files` input:
+
+```json
+{ "reportId": "report-id" }
+```
+
+Results include `reportFiles` with `id`, `reportId`, `jobId`, `filename`,
+`format`, `fileSize`, `status`, `contentPath`, and `createdAt`.
+
+`read_report_file` input:
+
+```json
+{ "reportFileId": "report-file-id", "format": "text" }
+```
+
+`format` may be `text` or `markdown`; default is `text`. The tool returns
+`reportFileContent` with `reportFileId`, `filename`, `content`, `format`,
+`fileSize`, and `truncated`. The content is capped at 1 MiB. DOCX bytes are
+never returned directly; the service extracts text from `word/document.xml`.
+Unsupported binary content returns a stable tool error instead of binary data.
+
+### Safety And QA Behavior
+
+- Query/read tools reuse the Document service layer and its permission checks.
+- Tool results are sanitized and do not expose service tokens, provider errors,
+  prompts, `fileRef`, object keys, storage URLs, buckets, or internal URLs.
+- QA enables these tools in the default tool whitelist, but they are not report
+  artifact tools. QA should summarize them as generic tool steps and must not
+  create `reportArtifact` from `document__list_*`, `document__get_material`, or
+  `document__read_report_file` results.
+
+### P2 Candidates, Documented Only
+
+These tools are intentionally not implemented by C-025:
+
+| Candidate tool | Purpose |
+| --- | --- |
+| `document__list_templates` | List report templates with optional type filter. |
+| `document__retry_job` | Retry a failed report generation job. |
+| `document__list_job_events` | List events for a report generation job. |
+| `document__retrieve_knowledge` | Retrieve report-oriented Knowledge snippets through Document retrieval settings. |

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,12 @@ func TestMCPToolServiceListToolsDefinesStableSchemas(t *testing.T) {
 		DocumentMCPToolGetTemplateSchema,
 		DocumentMCPToolExportReportDOCX,
 		DocumentMCPToolGetReportResult,
+		DocumentMCPToolListReports,
+		DocumentMCPToolGetReport,
+		DocumentMCPToolListMaterials,
+		DocumentMCPToolGetMaterial,
+		DocumentMCPToolListReportFiles,
+		DocumentMCPToolReadReportFile,
 	}
 	if len(tools) != len(want) {
 		t.Fatalf("tool count = %d, want %d", len(tools), len(want))
@@ -55,6 +62,10 @@ func TestMCPToolServiceListToolsDefinesStableSchemas(t *testing.T) {
 	assertSchemaRequires(t, seen[DocumentMCPToolGetTemplateSchema].InputSchema, "templateId")
 	assertSchemaRequires(t, seen[DocumentMCPToolExportReportDOCX].InputSchema, "reportId")
 	assertSchemaRequires(t, seen[DocumentMCPToolGetReportResult].InputSchema, "reportId")
+	assertSchemaRequires(t, seen[DocumentMCPToolGetReport].InputSchema, "reportId")
+	assertSchemaRequires(t, seen[DocumentMCPToolGetMaterial].InputSchema, "materialId")
+	assertSchemaRequires(t, seen[DocumentMCPToolListReportFiles].InputSchema, "reportId")
+	assertSchemaRequires(t, seen[DocumentMCPToolReadReportFile].InputSchema, "reportFileId")
 }
 
 func TestMCPToolServiceGenerateReportFromContentCreatesReportAndOutlineJob(t *testing.T) {
@@ -628,6 +639,179 @@ func TestMCPToolServiceGetReportResultIncludesSafeLatestFile(t *testing.T) {
 	}
 }
 
+func TestMCPToolServiceListAndGetReportsReturnSafeMetadata(t *testing.T) {
+	createdAt := time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC)
+	reports := &fakeMCPReportService{
+		list: ReportListResult{
+			Items: []Report{{
+				ID: "report-1", Name: "Inspection", ReportType: "summer_peak_inspection",
+				TemplateID: "tpl-1", Topic: "夏峰", Status: ReportStatusGenerated,
+				CreatorID: "user-1", CreatedAt: createdAt, UpdatedAt: createdAt,
+			}},
+			Page: PageMeta{Page: 2, PageSize: 10, Total: 11},
+		},
+		report: Report{
+			ID: "report-1", Name: "Inspection", ReportType: "summer_peak_inspection",
+			TemplateID: "tpl-1", Topic: "夏峰", Specialty: "电气", BusinessObject: "变电站",
+			Year: 2026, Status: ReportStatusGenerated, CreatorID: "user-1", CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+	}
+	svc := NewMCPToolService(MCPToolServiceConfig{ReportService: reports, Recorder: &fakeMCPOperationRecorder{}})
+
+	list := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-list"},
+		DocumentMCPToolListReports, json.RawMessage(`{"reportType":"summer_peak_inspection","status":"generated","page":2,"pageSize":10}`))
+	if list.Status != documentMCPToolResultSucceeded || len(list.Reports) != 1 || list.TotalCount != 11 || list.Page != 2 || list.PageSize != 10 {
+		t.Fatalf("list result = %+v", list)
+	}
+	if got := reports.listFilters[0]; got.ReportType != "summer_peak_inspection" || got.Status != "generated" || got.Page != 2 || got.PageSize != 10 {
+		t.Fatalf("list filter = %+v", got)
+	}
+
+	get := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-get"},
+		DocumentMCPToolGetReport, json.RawMessage(`{"reportId":"report-1"}`))
+	if get.Status != documentMCPToolResultSucceeded || get.Report == nil || get.Report.Topic != "夏峰" || get.Report.Year != 2026 {
+		t.Fatalf("get result = %+v", get)
+	}
+	raw, err := json.Marshal(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "CreatorID") || strings.Contains(string(raw), "file_ref") {
+		t.Fatalf("report metadata leaked internal fields: %s", raw)
+	}
+}
+
+func TestMCPToolServiceListReportsRejectsOverflowPage(t *testing.T) {
+	reports := &fakeMCPReportService{}
+	svc := NewMCPToolService(MCPToolServiceConfig{ReportService: reports, Recorder: &fakeMCPOperationRecorder{}})
+
+	result := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-page"},
+		DocumentMCPToolListReports, json.RawMessage(`{"page":2147483648}`))
+
+	if result.Status != documentMCPToolResultFailed || result.Error == nil || result.Error.Code != string(CodeValidation) {
+		t.Fatalf("overflow page result = %+v, want validation failure", result)
+	}
+	if len(reports.listFilters) != 0 {
+		t.Fatalf("ListReports was called with invalid pagination: %+v", reports.listFilters)
+	}
+}
+
+func TestMCPToolServiceListAndGetMaterialsHideFileRef(t *testing.T) {
+	createdAt := time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC)
+	documents := &fakeMCPDocumentService{
+		materials: ReportMaterialListResult{
+			Items: []ReportMaterial{{
+				ID: "mat-1", MaterialName: "Load data", MaterialType: "spreadsheet",
+				Category: "load", FileRef: "file_ref_hidden", Filename: "load.xlsx",
+				FileSize: 512, Tags: []string{"daily"}, Enabled: true, CreatedAt: createdAt, UpdatedAt: createdAt,
+			}},
+			Page: PageMeta{Page: 1, PageSize: 20, Total: 1},
+		},
+		material: ReportMaterial{
+			ID: "mat-1", MaterialName: "Load data", MaterialType: "spreadsheet",
+			Category: "load", FileRef: "file_ref_hidden", Filename: "load.xlsx",
+			FileSize: 512, Description: "daily load", Tags: []string{"daily"}, Enabled: true,
+			CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+	}
+	svc := NewMCPToolService(MCPToolServiceConfig{DocumentService: documents, Recorder: &fakeMCPOperationRecorder{}})
+
+	list := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-materials"},
+		DocumentMCPToolListMaterials, json.RawMessage(`{"category":"load"}`))
+	if list.Status != documentMCPToolResultSucceeded || len(list.Materials) != 1 || list.Materials[0].ID != "mat-1" {
+		t.Fatalf("list materials result = %+v", list)
+	}
+	get := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-material"},
+		DocumentMCPToolGetMaterial, json.RawMessage(`{"materialId":"mat-1"}`))
+	if get.Status != documentMCPToolResultSucceeded || get.Material == nil || get.Material.MaterialName != "Load data" {
+		t.Fatalf("get material result = %+v", get)
+	}
+	raw, err := json.Marshal([]MCPToolCallResult{list, get})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "file_ref_hidden") {
+		t.Fatalf("material tool result leaked file ref: %s", raw)
+	}
+}
+
+func TestMCPToolServiceListReportFilesAndReadDOCXText(t *testing.T) {
+	docx, err := NewSimpleDOCXGenerator().GenerateDOCX(context.Background(), Report{Name: "Inspection", Topic: "夏峰"}, []ReportSection{{
+		Title: "Summary", Content: "all clear token=secret", SortOrder: 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := &fakeMCPReportFileService{
+		list: ReportFileListResult{
+			Items: []ReportFile{{
+				ID: "rf-1", ReportID: "report-1", JobID: "job-1", Filename: "Inspection.docx",
+				Format: ReportFileFormatDOCX, FileRef: "file_ref_hidden", FileSize: int64(len(docx)),
+				Status: ReportFileStatusSucceeded, CreatedAt: time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC),
+			}},
+			Page: PageMeta{Page: 1, PageSize: 100, Total: 1},
+		},
+		readContent: FileContent{
+			Filename: "Inspection.docx", ContentType: docxContentType, SizeBytes: int64(len(docx)),
+			Content: io.NopCloser(strings.NewReader(string(docx))),
+		},
+	}
+	svc := NewMCPToolService(MCPToolServiceConfig{ReportFileSvc: files, Recorder: &fakeMCPOperationRecorder{}})
+
+	list := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-files"},
+		DocumentMCPToolListReportFiles, json.RawMessage(`{"reportId":"report-1"}`))
+	if list.Status != documentMCPToolResultSucceeded || len(list.ReportFiles) != 1 || list.ReportFiles[0].ContentPath == "" {
+		t.Fatalf("list report files result = %+v", list)
+	}
+	if files.listFilters[0].ReportID != "report-1" {
+		t.Fatalf("list report files filter = %+v", files.listFilters[0])
+	}
+
+	read := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-read"},
+		DocumentMCPToolReadReportFile, json.RawMessage(`{"reportFileId":"rf-1","format":"text"}`))
+	if read.Status != documentMCPToolResultSucceeded || read.ReportFileContent == nil {
+		t.Fatalf("read report file result = %+v", read)
+	}
+	if !strings.Contains(read.ReportFileContent.Content, "Inspection") || !strings.Contains(read.ReportFileContent.Content, "Summary") {
+		t.Fatalf("extracted content = %q", read.ReportFileContent.Content)
+	}
+	raw, err := json.Marshal(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "file_ref_hidden") || strings.Contains(string(raw), "token=secret") || strings.Contains(string(raw), "PK\x03\x04") {
+		t.Fatalf("read report file leaked internal/binary/sensitive data: %s", raw)
+	}
+}
+
+func TestMCPToolServiceReadReportFileValidationAndUnsupportedContent(t *testing.T) {
+	svc := NewMCPToolService(MCPToolServiceConfig{
+		ReportFileSvc: &fakeMCPReportFileService{
+			readContent: FileContent{
+				Filename: "report.bin", ContentType: "application/octet-stream", SizeBytes: 4,
+				Content: io.NopCloser(strings.NewReader("bin")),
+			},
+		},
+		Recorder: &fakeMCPOperationRecorder{},
+	})
+
+	missing := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-missing"},
+		DocumentMCPToolReadReportFile, json.RawMessage(`{}`))
+	if missing.Status != documentMCPToolResultFailed || missing.Error == nil || missing.Error.Code != string(CodeValidation) {
+		t.Fatalf("missing id result = %+v", missing)
+	}
+	invalidFormat := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-format"},
+		DocumentMCPToolReadReportFile, json.RawMessage(`{"reportFileId":"rf-1","format":"docx"}`))
+	if invalidFormat.Status != documentMCPToolResultFailed || invalidFormat.Error == nil || invalidFormat.Error.Code != string(CodeValidation) {
+		t.Fatalf("invalid format result = %+v", invalidFormat)
+	}
+	unsupported := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-unsupported"},
+		DocumentMCPToolReadReportFile, json.RawMessage(`{"reportFileId":"rf-1"}`))
+	if unsupported.Status != documentMCPToolResultFailed || unsupported.Error == nil || unsupported.Error.Code != string(CodeConflict) {
+		t.Fatalf("unsupported content result = %+v", unsupported)
+	}
+}
+
 func assertSchemaRequires(t *testing.T, schema map[string]any, fields ...string) {
 	t.Helper()
 	required, ok := schema["required"].([]any)
@@ -648,8 +832,13 @@ func assertSchemaRequires(t *testing.T, schema map[string]any, fields ...string)
 }
 
 type fakeMCPDocumentService struct {
-	structure ReportTemplateStructure
-	err       error
+	structure      ReportTemplateStructure
+	err            error
+	materials      ReportMaterialListResult
+	material       ReportMaterial
+	listMatErr     error
+	getMatErr      error
+	listMatFilters []ReportMaterialListFilter
 }
 
 func (f *fakeMCPDocumentService) GetReportTemplateStructure(context.Context, RequestContext, string) (ReportTemplateStructure, error) {
@@ -657,6 +846,21 @@ func (f *fakeMCPDocumentService) GetReportTemplateStructure(context.Context, Req
 		return ReportTemplateStructure{}, f.err
 	}
 	return f.structure, nil
+}
+
+func (f *fakeMCPDocumentService) ListReportMaterials(_ context.Context, _ RequestContext, filter ReportMaterialListFilter) (ReportMaterialListResult, error) {
+	f.listMatFilters = append(f.listMatFilters, filter)
+	if f.listMatErr != nil {
+		return ReportMaterialListResult{}, f.listMatErr
+	}
+	return f.materials, nil
+}
+
+func (f *fakeMCPDocumentService) GetReportMaterial(context.Context, RequestContext, string) (ReportMaterial, error) {
+	if f.getMatErr != nil {
+		return ReportMaterial{}, f.getMatErr
+	}
+	return f.material, nil
 }
 
 type fakeMCPJobService struct {
@@ -695,6 +899,9 @@ type fakeMCPReportService struct {
 	createReport Report
 	createErr    error
 	createInputs []CreateReportInput
+	list         ReportListResult
+	listErr      error
+	listFilters  []ReportListFilter
 }
 
 func (f *fakeMCPReportService) CreateReport(_ context.Context, _ RequestContext, input CreateReportInput) (Report, error) {
@@ -715,6 +922,14 @@ func (f *fakeMCPReportService) GetReport(context.Context, RequestContext, string
 	return f.report, nil
 }
 
+func (f *fakeMCPReportService) ListReports(_ context.Context, _ RequestContext, filter ReportListFilter) (ReportListResult, error) {
+	f.listFilters = append(f.listFilters, filter)
+	if f.listErr != nil {
+		return ReportListResult{}, f.listErr
+	}
+	return f.list, nil
+}
+
 type fakeMCPReportSettingsService struct {
 	settings ReportSettings
 	err      error
@@ -733,6 +948,11 @@ type fakeMCPReportFileService struct {
 	createInputs []CreateReportFileInput
 	getFile      ReportFile
 	getErr       error
+	list         ReportFileListResult
+	listErr      error
+	listFilters  []ReportFileListFilter
+	readContent  FileContent
+	readErr      error
 }
 
 func (f *fakeMCPReportFileService) CreateReportFile(_ context.Context, _ RequestContext, input CreateReportFileInput) (ReportFile, error) {
@@ -748,6 +968,21 @@ func (f *fakeMCPReportFileService) GetReportFile(context.Context, RequestContext
 		return ReportFile{}, f.getErr
 	}
 	return f.getFile, nil
+}
+
+func (f *fakeMCPReportFileService) ListReportFiles(_ context.Context, _ RequestContext, filter ReportFileListFilter) (ReportFileListResult, error) {
+	f.listFilters = append(f.listFilters, filter)
+	if f.listErr != nil {
+		return ReportFileListResult{}, f.listErr
+	}
+	return f.list, nil
+}
+
+func (f *fakeMCPReportFileService) ReadReportFileContent(context.Context, RequestContext, string) (FileContent, error) {
+	if f.readErr != nil {
+		return FileContent{}, f.readErr
+	}
+	return f.readContent, nil
 }
 
 type fakeMCPOperationRecorder struct {

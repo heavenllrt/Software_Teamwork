@@ -1,9 +1,14 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"io"
+	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -20,6 +25,12 @@ const (
 	DocumentMCPToolGetTemplateSchema         = "get_template_schema"
 	DocumentMCPToolExportReportDOCX          = "export_report_docx"
 	DocumentMCPToolGetReportResult           = "get_report_result"
+	DocumentMCPToolListReports               = "list_reports"
+	DocumentMCPToolGetReport                 = "get_report"
+	DocumentMCPToolListMaterials             = "list_materials"
+	DocumentMCPToolGetMaterial               = "get_material"
+	DocumentMCPToolListReportFiles           = "list_report_files"
+	DocumentMCPToolReadReportFile            = "read_report_file"
 	OperationDocumentMCPToolCall             = "document_mcp_tool_call"
 	documentMCPRequestSource                 = "mcp"
 	documentMCPToolResultSucceeded           = "succeeded"
@@ -29,6 +40,7 @@ const (
 	documentMCPErrorUnsupported              = "unsupported"
 	documentMCPDefaultContentReportType      = "summer_peak_inspection"
 	documentMCPMaxSourceContentBytes         = 20_000
+	documentMCPMaxReportFileContentBytes     = 1 << 20
 )
 
 // MCPDocumentService is the subset of the Document metadata service used by
@@ -36,6 +48,8 @@ const (
 // through to repositories or storage internals.
 type MCPDocumentService interface {
 	GetReportTemplateStructure(context.Context, RequestContext, string) (ReportTemplateStructure, error)
+	ListReportMaterials(context.Context, RequestContext, ReportMaterialListFilter) (ReportMaterialListResult, error)
+	GetReportMaterial(context.Context, RequestContext, string) (ReportMaterial, error)
 }
 
 type MCPJobService interface {
@@ -46,6 +60,7 @@ type MCPJobService interface {
 type MCPReportService interface {
 	CreateReport(context.Context, RequestContext, CreateReportInput) (Report, error)
 	GetReport(context.Context, RequestContext, string) (Report, error)
+	ListReports(context.Context, RequestContext, ReportListFilter) (ReportListResult, error)
 }
 
 type MCPReportSettingsService interface {
@@ -55,6 +70,8 @@ type MCPReportSettingsService interface {
 type MCPReportFileService interface {
 	CreateReportFile(context.Context, RequestContext, CreateReportFileInput) (ReportFile, error)
 	GetReportFile(context.Context, RequestContext, string) (ReportFile, error)
+	ListReportFiles(context.Context, RequestContext, ReportFileListFilter) (ReportFileListResult, error)
+	ReadReportFileContent(context.Context, RequestContext, string) (FileContent, error)
 }
 
 type MCPToolService struct {
@@ -95,15 +112,23 @@ type MCPToolDefinition struct {
 }
 
 type MCPToolCallResult struct {
-	RequestID      string                    `json:"requestId"`
-	ToolName       string                    `json:"toolName"`
-	Status         string                    `json:"status"`
-	Job            *MCPReportJobSummary      `json:"job,omitempty"`
-	Report         *MCPReportSummary         `json:"report,omitempty"`
-	ReportFile     *MCPReportFileSummary     `json:"reportFile,omitempty"`
-	TemplateSchema *MCPTemplateSchemaSummary `json:"templateSchema,omitempty"`
-	Error          *MCPToolError             `json:"error,omitempty"`
-	Warnings       []string                  `json:"warnings,omitempty"`
+	RequestID         string                       `json:"requestId"`
+	ToolName          string                       `json:"toolName"`
+	Status            string                       `json:"status"`
+	Job               *MCPReportJobSummary         `json:"job,omitempty"`
+	Report            *MCPReportSummary            `json:"report,omitempty"`
+	Reports           []MCPReportSummary           `json:"reports,omitempty"`
+	Material          *MCPReportMaterialSummary    `json:"material,omitempty"`
+	Materials         []MCPReportMaterialSummary   `json:"materials,omitempty"`
+	ReportFile        *MCPReportFileSummary        `json:"reportFile,omitempty"`
+	ReportFiles       []MCPReportFileSummary       `json:"reportFiles,omitempty"`
+	ReportFileContent *MCPReportFileContentSummary `json:"reportFileContent,omitempty"`
+	TemplateSchema    *MCPTemplateSchemaSummary    `json:"templateSchema,omitempty"`
+	TotalCount        int                          `json:"totalCount,omitempty"`
+	Page              int                          `json:"page,omitempty"`
+	PageSize          int                          `json:"pageSize,omitempty"`
+	Error             *MCPToolError                `json:"error,omitempty"`
+	Warnings          []string                     `json:"warnings,omitempty"`
 }
 
 type MCPToolError struct {
@@ -129,12 +154,31 @@ type MCPReportSummary struct {
 	Name               string `json:"name,omitempty"`
 	ReportType         string `json:"reportType,omitempty"`
 	TemplateID         string `json:"templateId,omitempty"`
+	Topic              string `json:"topic,omitempty"`
+	Specialty          string `json:"specialty,omitempty"`
+	BusinessObject     string `json:"businessObject,omitempty"`
+	Year               int    `json:"year,omitempty"`
 	Status             string `json:"status"`
 	LatestJobID        string `json:"latestJobId,omitempty"`
 	LatestReportFileID string `json:"latestReportFileId,omitempty"`
+	CreatedAt          string `json:"createdAt,omitempty"`
 	GeneratedAt        string `json:"generatedAt,omitempty"`
 	ExportedAt         string `json:"exportedAt,omitempty"`
 	UpdatedAt          string `json:"updatedAt,omitempty"`
+}
+
+type MCPReportMaterialSummary struct {
+	ID           string   `json:"id"`
+	MaterialName string   `json:"materialName,omitempty"`
+	MaterialType string   `json:"materialType,omitempty"`
+	Category     string   `json:"category,omitempty"`
+	Filename     string   `json:"filename,omitempty"`
+	FileSize     int64    `json:"fileSize,omitempty"`
+	Description  string   `json:"description,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	Enabled      bool     `json:"enabled"`
+	CreatedAt    string   `json:"createdAt,omitempty"`
+	UpdatedAt    string   `json:"updatedAt,omitempty"`
 }
 
 type MCPReportFileSummary struct {
@@ -147,6 +191,15 @@ type MCPReportFileSummary struct {
 	Status      string `json:"status"`
 	ContentPath string `json:"contentPath,omitempty"`
 	CreatedAt   string `json:"createdAt,omitempty"`
+}
+
+type MCPReportFileContentSummary struct {
+	ReportFileID string `json:"reportFileId"`
+	Filename     string `json:"filename,omitempty"`
+	Content      string `json:"content"`
+	Format       string `json:"format"`
+	FileSize     int64  `json:"fileSize,omitempty"`
+	Truncated    bool   `json:"truncated,omitempty"`
 }
 
 type MCPTemplateSchemaSummary struct {
@@ -167,6 +220,12 @@ func (s *MCPToolService) ListTools(context.Context) []MCPToolDefinition {
 		toolDefinition(DocumentMCPToolGetTemplateSchema, "Read a report template structure schema.", requiredStringSchema("templateId", "Report template ID.")),
 		toolDefinition(DocumentMCPToolExportReportDOCX, "Create a basic DOCX report export job.", exportDOCXSchema()),
 		toolDefinition(DocumentMCPToolGetReportResult, "Read a safe report result summary.", requiredStringSchema("reportId", "Report ID.")),
+		toolDefinition(DocumentMCPToolListReports, "Query reports with optional type and status filters.", listReportsSchema()),
+		toolDefinition(DocumentMCPToolGetReport, "Read detailed metadata for a report.", requiredStringSchema("reportId", "Report ID.")),
+		toolDefinition(DocumentMCPToolListMaterials, "List report materials with optional category filter.", listMaterialsSchema()),
+		toolDefinition(DocumentMCPToolGetMaterial, "Read metadata for a report material.", requiredStringSchema("materialId", "Report material ID.")),
+		toolDefinition(DocumentMCPToolListReportFiles, "List generated report files for a report.", requiredStringSchema("reportId", "Report ID.")),
+		toolDefinition(DocumentMCPToolReadReportFile, "Read generated report file content as bounded text or markdown.", readReportFileSchema()),
 	}
 }
 
@@ -205,6 +264,18 @@ func (s *MCPToolService) CallTool(ctx context.Context, reqCtx RequestContext, na
 		result = s.exportReportDOCX(ctx, reqCtx, args)
 	case DocumentMCPToolGetReportResult:
 		result = s.getReportResult(ctx, reqCtx, args)
+	case DocumentMCPToolListReports:
+		result = s.listReports(ctx, reqCtx, args)
+	case DocumentMCPToolGetReport:
+		result = s.getReport(ctx, reqCtx, args)
+	case DocumentMCPToolListMaterials:
+		result = s.listMaterials(ctx, reqCtx, args)
+	case DocumentMCPToolGetMaterial:
+		result = s.getMaterial(ctx, reqCtx, args)
+	case DocumentMCPToolListReportFiles:
+		result = s.listReportFiles(ctx, reqCtx, args)
+	case DocumentMCPToolReadReportFile:
+		result = s.readReportFile(ctx, reqCtx, args)
 	default:
 		result.Status = documentMCPToolResultFailed
 		result.Error = &MCPToolError{Code: documentMCPErrorUnsupported, Message: "document MCP tool is not supported"}
@@ -526,6 +597,236 @@ func (s *MCPToolService) getReportResult(ctx context.Context, reqCtx RequestCont
 	return result
 }
 
+func (s *MCPToolService) listReports(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
+	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolListReports}
+	if s.reports == nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(NewError(CodeDependency, "report service is not configured", nil))
+		s.recordToolCall(ctx, reqCtx, result, listReportsParameterSummary(args))
+		return result
+	}
+	page, pageSize, err := paginationArguments(args)
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, listReportsParameterSummary(args))
+		return result
+	}
+	list, err := s.reports.ListReports(ctx, reqCtx, ReportListFilter{
+		Page:       page,
+		PageSize:   pageSize,
+		ReportType: stringArgument(args, "reportType", "report_type"),
+		Status:     stringArgument(args, "status"),
+	})
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, listReportsParameterSummary(args))
+		return result
+	}
+	result.Status = documentMCPToolResultSucceeded
+	result.Reports = reportSummaries(list.Items)
+	result.TotalCount = list.Page.Total
+	result.Page = list.Page.Page
+	result.PageSize = list.Page.PageSize
+	s.recordToolCall(ctx, reqCtx, result, map[string]any{
+		"reportType":  stringArgument(args, "reportType", "report_type"),
+		"status":      stringArgument(args, "status"),
+		"page":        result.Page,
+		"pageSize":    result.PageSize,
+		"resultCount": len(result.Reports),
+	})
+	return result
+}
+
+func (s *MCPToolService) getReport(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
+	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolGetReport}
+	if s.reports == nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(NewError(CodeDependency, "report service is not configured", nil))
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"reportIdProvided": stringArgument(args, "reportId", "report_id") != ""})
+		return result
+	}
+	reportID := stringArgument(args, "reportId", "report_id")
+	if reportID == "" {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(ValidationError(map[string]string{"reportId": "is required"}))
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"reportIdProvided": false})
+		return result
+	}
+	report, err := s.reports.GetReport(ctx, reqCtx, reportID)
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"reportId": reportID})
+		return result
+	}
+	result.Status = documentMCPToolResultSucceeded
+	result.Report = reportSummary(report)
+	s.recordToolCall(ctx, reqCtx, result, map[string]any{"reportId": report.ID})
+	return result
+}
+
+func (s *MCPToolService) listMaterials(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
+	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolListMaterials}
+	if s.documents == nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(NewError(CodeDependency, "document service is not configured", nil))
+		s.recordToolCall(ctx, reqCtx, result, listMaterialsParameterSummary(args))
+		return result
+	}
+	page, pageSize, err := paginationArguments(args)
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, listMaterialsParameterSummary(args))
+		return result
+	}
+	list, err := s.documents.ListReportMaterials(ctx, reqCtx, ReportMaterialListFilter{
+		Page:     page,
+		PageSize: pageSize,
+		Category: stringArgument(args, "category"),
+	})
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, listMaterialsParameterSummary(args))
+		return result
+	}
+	result.Status = documentMCPToolResultSucceeded
+	result.Materials = materialSummaries(list.Items)
+	result.TotalCount = list.Page.Total
+	result.Page = list.Page.Page
+	result.PageSize = list.Page.PageSize
+	s.recordToolCall(ctx, reqCtx, result, map[string]any{
+		"category":    stringArgument(args, "category"),
+		"page":        result.Page,
+		"pageSize":    result.PageSize,
+		"resultCount": len(result.Materials),
+	})
+	return result
+}
+
+func (s *MCPToolService) getMaterial(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
+	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolGetMaterial}
+	if s.documents == nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(NewError(CodeDependency, "document service is not configured", nil))
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"materialIdProvided": stringArgument(args, "materialId", "material_id") != ""})
+		return result
+	}
+	materialID := stringArgument(args, "materialId", "material_id")
+	if materialID == "" {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(ValidationError(map[string]string{"materialId": "is required"}))
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"materialIdProvided": false})
+		return result
+	}
+	material, err := s.documents.GetReportMaterial(ctx, reqCtx, materialID)
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"materialId": materialID})
+		return result
+	}
+	result.Status = documentMCPToolResultSucceeded
+	result.Material = materialSummary(material)
+	s.recordToolCall(ctx, reqCtx, result, map[string]any{"materialId": material.ID})
+	return result
+}
+
+func (s *MCPToolService) listReportFiles(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
+	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolListReportFiles}
+	if s.reportFiles == nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(NewError(CodeDependency, "report file service is not configured", nil))
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"reportIdProvided": stringArgument(args, "reportId", "report_id") != ""})
+		return result
+	}
+	reportID := stringArgument(args, "reportId", "report_id")
+	if reportID == "" {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(ValidationError(map[string]string{"reportId": "is required"}))
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"reportIdProvided": false})
+		return result
+	}
+	list, err := s.reportFiles.ListReportFiles(ctx, reqCtx, ReportFileListFilter{
+		Page:     DefaultPage,
+		PageSize: MaxPageSize,
+		ReportID: reportID,
+	})
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, map[string]any{"reportId": reportID})
+		return result
+	}
+	result.Status = documentMCPToolResultSucceeded
+	result.ReportFiles = reportFileSummaries(list.Items)
+	result.TotalCount = list.Page.Total
+	result.Page = list.Page.Page
+	result.PageSize = list.Page.PageSize
+	s.recordToolCall(ctx, reqCtx, result, map[string]any{
+		"reportId":    reportID,
+		"resultCount": len(result.ReportFiles),
+	})
+	return result
+}
+
+func (s *MCPToolService) readReportFile(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
+	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolReadReportFile}
+	if s.reportFiles == nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(NewError(CodeDependency, "report file service is not configured", nil))
+		s.recordToolCall(ctx, reqCtx, result, readReportFileParameterSummary(args, 0, false))
+		return result
+	}
+	reportFileID := stringArgument(args, "reportFileId", "report_file_id")
+	if reportFileID == "" {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(ValidationError(map[string]string{"reportFileId": "is required"}))
+		s.recordToolCall(ctx, reqCtx, result, readReportFileParameterSummary(args, 0, false))
+		return result
+	}
+	format := strings.ToLower(stringArgument(args, "format"))
+	if format == "" {
+		format = "text"
+	}
+	if format != "text" && format != "markdown" {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(ValidationError(map[string]string{"format": "must be text or markdown"}))
+		s.recordToolCall(ctx, reqCtx, result, readReportFileParameterSummary(args, 0, false))
+		return result
+	}
+	content, err := s.reportFiles.ReadReportFileContent(ctx, reqCtx, reportFileID)
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, readReportFileParameterSummary(args, 0, false))
+		return result
+	}
+	defer content.Content.Close()
+
+	text, truncated, err := readSafeReportFileText(content)
+	if err != nil {
+		result.Status = documentMCPToolResultFailed
+		result.Error = toolErrorFromError(err)
+		s.recordToolCall(ctx, reqCtx, result, readReportFileParameterSummary(args, 0, false))
+		return result
+	}
+	result.Status = documentMCPToolResultSucceeded
+	result.ReportFileContent = &MCPReportFileContentSummary{
+		ReportFileID: reportFileID,
+		Filename:     content.Filename,
+		Content:      renderReportFileContent(text, format),
+		Format:       format,
+		FileSize:     content.SizeBytes,
+		Truncated:    truncated,
+	}
+	s.recordToolCall(ctx, reqCtx, result, readReportFileParameterSummary(args, len([]byte(result.ReportFileContent.Content)), truncated))
+	return result
+}
+
 func (s *MCPToolService) recordToolCall(ctx context.Context, reqCtx RequestContext, result MCPToolCallResult, summary map[string]any) {
 	if s.recorder == nil {
 		return
@@ -565,8 +866,14 @@ func mcpResultTarget(result MCPToolCallResult) (string, string) {
 	if result.ReportFile != nil && result.ReportFile.ID != "" {
 		return "report_file", result.ReportFile.ID
 	}
+	if result.ReportFileContent != nil && result.ReportFileContent.ReportFileID != "" {
+		return "report_file", result.ReportFileContent.ReportFileID
+	}
 	if result.Report != nil && result.Report.ID != "" {
 		return "report", result.Report.ID
+	}
+	if result.Material != nil && result.Material.ID != "" {
+		return "material", result.Material.ID
 	}
 	if result.TemplateSchema != nil && result.TemplateSchema.TemplateID != "" {
 		return "report_template", result.TemplateSchema.TemplateID
@@ -715,19 +1022,79 @@ func reportJobSummary(job ReportJob) *MCPReportJobSummary {
 	}
 }
 
+func reportSummaries(reports []Report) []MCPReportSummary {
+	if len(reports) == 0 {
+		return []MCPReportSummary{}
+	}
+	result := make([]MCPReportSummary, 0, len(reports))
+	for _, report := range reports {
+		if summary := reportSummary(report); summary != nil {
+			result = append(result, *summary)
+		}
+	}
+	return result
+}
+
 func reportSummary(report Report) *MCPReportSummary {
 	return &MCPReportSummary{
 		ID:                 report.ID,
 		Name:               report.Name,
 		ReportType:         report.ReportType,
 		TemplateID:         report.TemplateID,
+		Topic:              report.Topic,
+		Specialty:          report.Specialty,
+		BusinessObject:     report.BusinessObject,
+		Year:               report.Year,
 		Status:             string(report.Status),
 		LatestJobID:        report.LatestJobID,
 		LatestReportFileID: report.LatestReportFileID,
+		CreatedAt:          formatMCPTime(report.CreatedAt),
 		GeneratedAt:        formatMCPTimePtr(report.GeneratedAt),
 		ExportedAt:         formatMCPTimePtr(report.ExportedAt),
 		UpdatedAt:          formatMCPTime(report.UpdatedAt),
 	}
+}
+
+func materialSummaries(materials []ReportMaterial) []MCPReportMaterialSummary {
+	if len(materials) == 0 {
+		return []MCPReportMaterialSummary{}
+	}
+	result := make([]MCPReportMaterialSummary, 0, len(materials))
+	for _, material := range materials {
+		if summary := materialSummary(material); summary != nil {
+			result = append(result, *summary)
+		}
+	}
+	return result
+}
+
+func materialSummary(material ReportMaterial) *MCPReportMaterialSummary {
+	return &MCPReportMaterialSummary{
+		ID:           material.ID,
+		MaterialName: material.MaterialName,
+		MaterialType: material.MaterialType,
+		Category:     material.Category,
+		Filename:     material.Filename,
+		FileSize:     material.FileSize,
+		Description:  material.Description,
+		Tags:         append([]string(nil), material.Tags...),
+		Enabled:      material.Enabled,
+		CreatedAt:    formatMCPTime(material.CreatedAt),
+		UpdatedAt:    formatMCPTime(material.UpdatedAt),
+	}
+}
+
+func reportFileSummaries(reportFiles []ReportFile) []MCPReportFileSummary {
+	if len(reportFiles) == 0 {
+		return []MCPReportFileSummary{}
+	}
+	result := make([]MCPReportFileSummary, 0, len(reportFiles))
+	for _, reportFile := range reportFiles {
+		if summary := reportFileSummary(reportFile); summary != nil {
+			result = append(result, *summary)
+		}
+	}
+	return result
 }
 
 func reportFileSummary(reportFile ReportFile) *MCPReportFileSummary {
@@ -745,6 +1112,202 @@ func reportFileSummary(reportFile ReportFile) *MCPReportFileSummary {
 		summary.ContentPath = "/api/v1/report-files/" + reportFile.ID + "/content"
 	}
 	return summary
+}
+
+func paginationArguments(args map[string]any) (int, int, error) {
+	page, err := intArgument(args, DefaultPage, "page")
+	if err != nil {
+		return 0, 0, ValidationError(map[string]string{"page": "must be an integer between 1 and 2147483647"})
+	}
+	pageSize, err := intArgument(args, DefaultPageSize, "pageSize", "page_size")
+	if err != nil {
+		return 0, 0, ValidationError(map[string]string{"pageSize": "must be an integer between 1 and 100"})
+	}
+	if page < 1 {
+		return 0, 0, ValidationError(map[string]string{"page": "must be greater than or equal to 1"})
+	}
+	if pageSize < 1 || pageSize > MaxPageSize {
+		return 0, 0, ValidationError(map[string]string{"pageSize": "must be between 1 and 100"})
+	}
+	return page, pageSize, nil
+}
+
+func intArgument(args map[string]any, fallback int, names ...string) (int, error) {
+	for _, name := range names {
+		value, ok := args[name]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case int:
+			if typed < math.MinInt32 || typed > math.MaxInt32 {
+				return 0, fmt.Errorf("argument %s is out of range", name)
+			}
+			return typed, nil
+		case int64:
+			if typed < math.MinInt32 || typed > math.MaxInt32 {
+				return 0, fmt.Errorf("argument %s is out of range", name)
+			}
+			return int(typed), nil
+		case float64:
+			if typed < math.MinInt32 || typed > math.MaxInt32 || typed != math.Trunc(typed) {
+				return 0, fmt.Errorf("argument %s must be an integer", name)
+			}
+			return int(typed), nil
+		case json.Number:
+			parsed, err := typed.Int64()
+			if err != nil {
+				return 0, err
+			}
+			if parsed < math.MinInt32 || parsed > math.MaxInt32 {
+				return 0, fmt.Errorf("argument %s is out of range", name)
+			}
+			return int(parsed), nil
+		default:
+			return 0, fmt.Errorf("argument %s must be an integer", name)
+		}
+	}
+	return fallback, nil
+}
+
+func readSafeReportFileText(content FileContent) (string, bool, error) {
+	if content.Content == nil {
+		return "", false, NewError(CodeDependency, "report file content is not available", nil)
+	}
+	raw, err := io.ReadAll(io.LimitReader(content.Content, documentMCPMaxReportFileContentBytes+1))
+	if err != nil {
+		return "", false, dependencyError("read report file content", err)
+	}
+	truncated := len(raw) > documentMCPMaxReportFileContentBytes
+	if truncated {
+		raw = raw[:documentMCPMaxReportFileContentBytes]
+	}
+	text, err := extractReportFileText(raw, content.ContentType)
+	if err != nil {
+		return "", false, err
+	}
+	text = strings.TrimSpace(strings.ToValidUTF8(text, ""))
+	text = redactSourceContentFragments(text)
+	return text, truncated, nil
+}
+
+func extractReportFileText(raw []byte, contentType string) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+	contentType = strings.ToLower(strings.TrimSpace(contentType))
+	if strings.Contains(contentType, "markdown") || strings.HasPrefix(contentType, "text/") {
+		return string(raw), nil
+	}
+	text, err := extractDOCXText(raw)
+	if err == nil {
+		return text, nil
+	}
+	return "", NewError(CodeConflict, "report file content is not readable as text", err)
+}
+
+func extractDOCXText(raw []byte) (string, error) {
+	reader, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
+	if err != nil {
+		return "", err
+	}
+	for _, file := range reader.File {
+		if file.Name != "word/document.xml" {
+			continue
+		}
+		part, err := file.Open()
+		if err != nil {
+			return "", err
+		}
+		defer part.Close()
+		return extractWordDocumentText(part)
+	}
+	return "", fmt.Errorf("word/document.xml not found")
+}
+
+func extractWordDocumentText(reader io.Reader) (string, error) {
+	decoder := xml.NewDecoder(reader)
+	var builder strings.Builder
+	needsSpace := false
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return "", err
+		}
+		switch typed := token.(type) {
+		case xml.StartElement:
+			switch typed.Name.Local {
+			case "p", "tr":
+				appendReportFileTextSeparator(&builder, "\n")
+				needsSpace = false
+			case "tc":
+				if needsSpace {
+					appendReportFileTextSeparator(&builder, "\t")
+				}
+			case "br":
+				appendReportFileTextSeparator(&builder, "\n")
+				needsSpace = false
+			}
+		case xml.CharData:
+			text := strings.TrimSpace(string(typed))
+			if text == "" {
+				continue
+			}
+			if needsSpace && builder.Len() > 0 {
+				builder.WriteByte(' ')
+			}
+			builder.WriteString(text)
+			needsSpace = true
+		}
+		if builder.Len() > documentMCPMaxReportFileContentBytes {
+			return builder.String()[:documentMCPMaxReportFileContentBytes], nil
+		}
+	}
+	return compactReportFileText(builder.String()), nil
+}
+
+func appendReportFileTextSeparator(builder *strings.Builder, sep string) {
+	if builder.Len() == 0 {
+		return
+	}
+	current := builder.String()
+	if strings.HasSuffix(current, sep) || strings.HasSuffix(current, "\n\n") {
+		return
+	}
+	builder.WriteString(sep)
+}
+
+func compactReportFileText(text string) string {
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines))
+	blank := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			if !blank {
+				out = append(out, "")
+			}
+			blank = true
+			continue
+		}
+		out = append(out, line)
+		blank = false
+	}
+	return strings.TrimSpace(strings.Join(out, "\n"))
+}
+
+func renderReportFileContent(text, format string) string {
+	if format != "markdown" {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n\n"))
 }
 
 func formatMCPTime(value time.Time) string {
@@ -803,6 +1366,41 @@ func reportFromContentParameterSummary(args map[string]any, excerptLength int, t
 		"documentNameProvided": stringArgument(args, "document_name", "documentName") != "",
 		"instructionsLength":   len([]byte(instructions)),
 	})
+}
+
+func listReportsParameterSummary(args map[string]any) map[string]any {
+	return safeToolSummary(map[string]any{
+		"reportType": stringArgument(args, "reportType", "report_type"),
+		"status":     stringArgument(args, "status"),
+		"page":       args["page"],
+		"pageSize":   firstPresent(args, "pageSize", "page_size"),
+	})
+}
+
+func listMaterialsParameterSummary(args map[string]any) map[string]any {
+	return safeToolSummary(map[string]any{
+		"category": stringArgument(args, "category"),
+		"page":     args["page"],
+		"pageSize": firstPresent(args, "pageSize", "page_size"),
+	})
+}
+
+func readReportFileParameterSummary(args map[string]any, contentLength int, truncated bool) map[string]any {
+	return safeToolSummary(map[string]any{
+		"reportFileId":  stringArgument(args, "reportFileId", "report_file_id"),
+		"format":        firstNonEmpty(stringArgument(args, "format"), "text"),
+		"contentLength": contentLength,
+		"truncated":     truncated,
+	})
+}
+
+func firstPresent(args map[string]any, names ...string) any {
+	for _, name := range names {
+		if value, ok := args[name]; ok {
+			return value
+		}
+	}
+	return nil
 }
 
 type boundedSourceContent struct {
@@ -926,7 +1524,34 @@ func reportFromContentSchema() map[string]any {
 	})
 }
 
+func listReportsSchema() map[string]any {
+	return objectSchema(nil, map[string]any{
+		"reportType": map[string]any{"type": "string", "description": "Optional report type code filter."},
+		"status":     map[string]any{"type": "string", "enum": []any{string(ReportStatusDraft), string(ReportStatusOutlineGenerating), string(ReportStatusOutlineGenerated), string(ReportStatusContentGenerating), string(ReportStatusGenerated), string(ReportStatusExporting), string(ReportStatusExported), string(ReportStatusFailed)}},
+		"page":       map[string]any{"type": "integer", "minimum": 1, "default": DefaultPage},
+		"pageSize":   map[string]any{"type": "integer", "minimum": 1, "maximum": MaxPageSize, "default": DefaultPageSize},
+	})
+}
+
+func listMaterialsSchema() map[string]any {
+	return objectSchema(nil, map[string]any{
+		"category": map[string]any{"type": "string", "description": "Optional material category filter."},
+		"page":     map[string]any{"type": "integer", "minimum": 1, "default": DefaultPage},
+		"pageSize": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxPageSize, "default": DefaultPageSize},
+	})
+}
+
+func readReportFileSchema() map[string]any {
+	return objectSchema([]any{"reportFileId"}, map[string]any{
+		"reportFileId": map[string]any{"type": "string", "description": "Report file business ID."},
+		"format":       map[string]any{"type": "string", "enum": []any{"text", "markdown"}, "default": "text"},
+	})
+}
+
 func objectSchema(required []any, properties map[string]any) map[string]any {
+	if required == nil {
+		required = []any{}
+	}
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,

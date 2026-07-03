@@ -88,6 +88,17 @@ func TestGenerateResultSummaryBuildsSanitizedDocumentFailure(t *testing.T) {
 	}
 }
 
+func TestGenerateResultSummaryLeavesDocumentQueryToolsAsGenericSteps(t *testing.T) {
+	summary := GenerateResultSummary("document__list_reports", `{"status":"succeeded","reports":[{"id":"rpt-1","name":"Inspection"}],"totalCount":1}`)
+
+	if _, ok := summary["reportArtifact"]; ok {
+		t.Fatalf("query tool summary should not create reportArtifact: %#v", summary)
+	}
+	if summary["tool"] != "document__list_reports" || summary["sanitized"] != true {
+		t.Fatalf("summary=%#v", summary)
+	}
+}
+
 func TestDefaultDocumentReportToolsArePolicyVisibleSubset(t *testing.T) {
 	allDocumentTools := []string{
 		ToolGenerateReportOutline,
@@ -100,6 +111,12 @@ func TestDefaultDocumentReportToolsArePolicyVisibleSubset(t *testing.T) {
 		ToolGetTemplateSchema,
 		ToolExportReportDOCX,
 		ToolGetReportResult,
+		ToolListReports,
+		ToolGetReport,
+		ToolListMaterials,
+		ToolGetMaterial,
+		ToolListReportFiles,
+		ToolReadReportFile,
 	}
 	definitions := make([]agent.ToolDefinition, 0, len(allDocumentTools))
 	for _, name := range allDocumentTools {

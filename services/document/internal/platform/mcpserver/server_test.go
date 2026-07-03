@@ -25,8 +25,8 @@ func TestListToolsExposesDocumentSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() failed: %v", err)
 	}
-	if len(result.Tools) != 10 {
-		t.Fatalf("ListTools returned %d tools, want 10", len(result.Tools))
+	if len(result.Tools) != 16 {
+		t.Fatalf("ListTools returned %d tools, want 16", len(result.Tools))
 	}
 
 	var exportTool *mcp.Tool

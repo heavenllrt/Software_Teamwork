@@ -142,6 +142,12 @@ adapter with these stable tool names:
 - `get_template_schema`
 - `export_report_docx`
 - `get_report_result`
+- `list_reports`
+- `get_report`
+- `list_materials`
+- `get_material`
+- `list_report_files`
+- `read_report_file`
 
 The adapter accepts a trusted `RequestContext`, validates JSON-object
 arguments, calls existing Document services, returns only safe summaries and
@@ -153,6 +159,13 @@ MinIO, Qdrant, or model providers.
 be treated as Pandoc/LibreOffice rich DOCX support. Exact schemas, runtime
 registration, result fields and the QA Agent workflow are documented in
 [`../../docs/services/document/docs/mcp-tools.md`](../../docs/services/document/docs/mcp-tools.md).
+
+The C-025 query/read tools (`list_reports`, `get_report`, `list_materials`,
+`get_material`, `list_report_files`, and `read_report_file`) are read-only
+metadata/content tools. `read_report_file` returns text or markdown only,
+extracts DOCX text from `word/document.xml`, caps returned content at 1 MiB,
+and never returns raw DOCX bytes, File Service internal references, object keys,
+storage URLs, or service tokens.
 
 ## Migrations
 

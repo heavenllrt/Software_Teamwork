@@ -18,6 +18,12 @@ const (
 	ToolRegenerateReportText      = "regenerate_report_text"
 	ToolRegenerateReportSection   = "regenerate_report_section"
 	ToolGetTemplateSchema         = "get_template_schema"
+	ToolListReports               = "list_reports"
+	ToolGetReport                 = "get_report"
+	ToolListMaterials             = "list_materials"
+	ToolGetMaterial               = "get_material"
+	ToolListReportFiles           = "list_report_files"
+	ToolReadReportFile            = "read_report_file"
 
 	defaultDocumentToolAlias = "document"
 )
@@ -41,6 +47,12 @@ var DefaultDocumentReportToolNames = []string{
 	defaultDocumentToolAlias + "__" + ToolGetGenerationStatus,
 	defaultDocumentToolAlias + "__" + ToolExportReportDOCX,
 	defaultDocumentToolAlias + "__" + ToolGetReportResult,
+	defaultDocumentToolAlias + "__" + ToolListReports,
+	defaultDocumentToolAlias + "__" + ToolGetReport,
+	defaultDocumentToolAlias + "__" + ToolListMaterials,
+	defaultDocumentToolAlias + "__" + ToolGetMaterial,
+	defaultDocumentToolAlias + "__" + ToolListReportFiles,
+	defaultDocumentToolAlias + "__" + ToolReadReportFile,
 }
 
 func OriginalToolName(toolName string) string {

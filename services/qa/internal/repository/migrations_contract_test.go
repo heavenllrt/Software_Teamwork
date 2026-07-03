@@ -8,7 +8,7 @@ import (
 )
 
 func TestMigrationsEnableDocumentReportToolsForUntouchedSystemDefault(t *testing.T) {
-	matches, err := filepath.Glob("../../migrations/*document*report*tool*.sql")
+	matches, err := filepath.Glob("../../migrations/*document*tool*.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,6 +35,12 @@ func TestMigrationsEnableDocumentReportToolsForUntouchedSystemDefault(t *testing
 		"document__get_generation_status",
 		"document__export_report_docx",
 		"document__get_report_result",
+		"document__list_reports",
+		"document__get_report",
+		"document__list_materials",
+		"document__get_material",
+		"document__list_report_files",
+		"document__read_report_file",
 	}
 	for _, token := range required {
 		if !strings.Contains(content, token) {
