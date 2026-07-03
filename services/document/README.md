@@ -144,8 +144,6 @@ adapter with these stable tool names:
 - `get_report_result`
 - `list_reports`
 - `get_report`
-- `list_materials`
-- `get_material`
 - `list_report_files`
 - `read_report_file`
 
@@ -160,16 +158,14 @@ be treated as Pandoc/LibreOffice rich DOCX support. Exact schemas, runtime
 registration, result fields and the QA Agent workflow are documented in
 [`../../docs/services/document/docs/mcp-tools.md`](../../docs/services/document/docs/mcp-tools.md).
 
-The C-025 query/read tools (`list_reports`, `get_report`, `list_materials`,
-`get_material`, `list_report_files`, and `read_report_file`) are read-only
-metadata/content tools. `read_report_file` returns text or markdown only,
-extracts DOCX text from `word/document.xml`, caps returned content at 1 MiB,
-and never returns raw DOCX bytes, File Service internal references, object keys,
-storage URLs, or service tokens.
+The C-025 query/read tools (`list_reports`, `get_report`,
+`list_report_files`, and `read_report_file`) are read-only metadata/content
+tools. `read_report_file` returns text or markdown only, extracts DOCX text
+from `word/document.xml`, caps returned content at 1 MiB, and never returns raw
+DOCX bytes, File Service internal references, object keys, storage URLs, or
+service tokens.
 
-QA defaults enable the report and report-file query tools only. Material
-metadata tools remain available from Document MCP for explicit opt-in
-configurations, but they are not in the default QA whitelist until their
+Material metadata query tools are not registered by Document MCP until their
 cross-user permission model is confirmed.
 
 ## Migrations

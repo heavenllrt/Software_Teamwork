@@ -29,8 +29,6 @@ func TestMCPToolServiceListToolsDefinesStableSchemas(t *testing.T) {
 		DocumentMCPToolGetReportResult,
 		DocumentMCPToolListReports,
 		DocumentMCPToolGetReport,
-		DocumentMCPToolListMaterials,
-		DocumentMCPToolGetMaterial,
 		DocumentMCPToolListReportFiles,
 		DocumentMCPToolReadReportFile,
 	}
@@ -65,7 +63,6 @@ func TestMCPToolServiceListToolsDefinesStableSchemas(t *testing.T) {
 	assertSchemaRequires(t, seen[DocumentMCPToolExportReportDOCX].InputSchema, "reportId")
 	assertSchemaRequires(t, seen[DocumentMCPToolGetReportResult].InputSchema, "reportId")
 	assertSchemaRequires(t, seen[DocumentMCPToolGetReport].InputSchema, "reportId")
-	assertSchemaRequires(t, seen[DocumentMCPToolGetMaterial].InputSchema, "materialId")
 	assertSchemaRequires(t, seen[DocumentMCPToolListReportFiles].InputSchema, "reportId")
 	assertSchemaRequires(t, seen[DocumentMCPToolReadReportFile].InputSchema, "reportFileId")
 }
@@ -698,42 +695,21 @@ func TestMCPToolServiceListReportsRejectsOverflowPage(t *testing.T) {
 	}
 }
 
-func TestMCPToolServiceListAndGetMaterialsHideFileRef(t *testing.T) {
-	createdAt := time.Date(2026, 7, 3, 9, 0, 0, 0, time.UTC)
-	documents := &fakeMCPDocumentService{
-		materials: ReportMaterialListResult{
-			Items: []ReportMaterial{{
-				ID: "mat-1", MaterialName: "Load data", MaterialType: "spreadsheet",
-				Category: "load", FileRef: "file_ref_hidden", Filename: "load.xlsx",
-				FileSize: 512, Tags: []string{"daily"}, Enabled: true, CreatedAt: createdAt, UpdatedAt: createdAt,
-			}},
-			Page: PageMeta{Page: 1, PageSize: 20, Total: 1},
-		},
-		material: ReportMaterial{
-			ID: "mat-1", MaterialName: "Load data", MaterialType: "spreadsheet",
-			Category: "load", FileRef: "file_ref_hidden", Filename: "load.xlsx",
-			FileSize: 512, Description: "daily load", Tags: []string{"daily"}, Enabled: true,
-			CreatedAt: createdAt, UpdatedAt: createdAt,
-		},
+func TestMCPToolServiceDoesNotExposeMaterialMetadataTools(t *testing.T) {
+	svc := NewMCPToolService(MCPToolServiceConfig{DocumentService: &fakeMCPDocumentService{}, Recorder: &fakeMCPOperationRecorder{}})
+	tools := svc.ListTools(context.Background())
+	for _, tool := range tools {
+		if tool.Name == "list_materials" || tool.Name == "get_material" {
+			t.Fatalf("material metadata tool %q must not be registered before permission model is confirmed", tool.Name)
+		}
 	}
-	svc := NewMCPToolService(MCPToolServiceConfig{DocumentService: documents, Recorder: &fakeMCPOperationRecorder{}})
 
-	list := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-materials"},
-		DocumentMCPToolListMaterials, json.RawMessage(`{"category":"load"}`))
-	if list.Status != documentMCPToolResultSucceeded || len(list.Materials) != 1 || list.Materials[0].ID != "mat-1" {
-		t.Fatalf("list materials result = %+v", list)
-	}
-	get := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-material"},
-		DocumentMCPToolGetMaterial, json.RawMessage(`{"materialId":"mat-1"}`))
-	if get.Status != documentMCPToolResultSucceeded || get.Material == nil || get.Material.MaterialName != "Load data" {
-		t.Fatalf("get material result = %+v", get)
-	}
-	raw, err := json.Marshal([]MCPToolCallResult{list, get})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(raw), "file_ref_hidden") {
-		t.Fatalf("material tool result leaked file ref: %s", raw)
+	for _, toolName := range []string{"list_materials", "get_material"} {
+		result := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-material-blocked"},
+			toolName, json.RawMessage(`{}`))
+		if result.Status != documentMCPToolResultFailed || result.Error == nil || result.Error.Code != documentMCPErrorUnsupported {
+			t.Fatalf("material tool %q result = %+v, want unsupported", toolName, result)
+		}
 	}
 }
 
@@ -900,13 +876,8 @@ func assertSchemaRequires(t *testing.T, schema map[string]any, fields ...string)
 }
 
 type fakeMCPDocumentService struct {
-	structure      ReportTemplateStructure
-	err            error
-	materials      ReportMaterialListResult
-	material       ReportMaterial
-	listMatErr     error
-	getMatErr      error
-	listMatFilters []ReportMaterialListFilter
+	structure ReportTemplateStructure
+	err       error
 }
 
 func (f *fakeMCPDocumentService) GetReportTemplateStructure(context.Context, RequestContext, string) (ReportTemplateStructure, error) {
@@ -914,21 +885,6 @@ func (f *fakeMCPDocumentService) GetReportTemplateStructure(context.Context, Req
 		return ReportTemplateStructure{}, f.err
 	}
 	return f.structure, nil
-}
-
-func (f *fakeMCPDocumentService) ListReportMaterials(_ context.Context, _ RequestContext, filter ReportMaterialListFilter) (ReportMaterialListResult, error) {
-	f.listMatFilters = append(f.listMatFilters, filter)
-	if f.listMatErr != nil {
-		return ReportMaterialListResult{}, f.listMatErr
-	}
-	return f.materials, nil
-}
-
-func (f *fakeMCPDocumentService) GetReportMaterial(context.Context, RequestContext, string) (ReportMaterial, error) {
-	if f.getMatErr != nil {
-		return ReportMaterial{}, f.getMatErr
-	}
-	return f.material, nil
 }
 
 type fakeMCPJobService struct {

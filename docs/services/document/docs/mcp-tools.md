@@ -226,8 +226,6 @@ tools through the `document__` alias prefix.
 | --- | --- | --- |
 | `document__list_reports` | `list_reports` | Query reports with optional `reportType` and `status` filters. |
 | `document__get_report` | `get_report` | Read detailed safe report metadata by `reportId`. |
-| `document__list_materials` | `list_materials` | Query report materials with optional `category` filter. |
-| `document__get_material` | `get_material` | Read safe material metadata by `materialId`. |
 | `document__list_report_files` | `list_report_files` | List generated report files for a `reportId`. |
 | `document__read_report_file` | `read_report_file` | Read a generated report file as bounded `text` or `markdown`. |
 
@@ -252,23 +250,6 @@ timestamps.
 ```json
 { "reportId": "report-id" }
 ```
-
-`list_materials` input:
-
-```json
-{ "category": "inspection", "page": 1, "pageSize": 20 }
-```
-
-`get_material` input:
-
-```json
-{ "materialId": "material-id" }
-```
-
-Material results include `id`, `materialName`, `materialType`, `category`,
-`filename`, `fileSize`, `description`, `tags`, `enabled`, and safe timestamps.
-They must not expose `fileRef`, object keys, storage URLs, buckets, or internal
-File Service IDs.
 
 `list_report_files` input:
 
@@ -297,13 +278,12 @@ Unsupported binary content returns a stable tool error instead of binary data.
 - Tool results are sanitized and do not expose service tokens, provider errors,
   prompts, `fileRef`, object keys, storage URLs, buckets, or internal URLs.
 - QA enables the report and report-file query tools in the default tool
-  whitelist. Material metadata tools (`document__list_materials` and
-  `document__get_material`) remain opt-in until their cross-user permission
-  model is confirmed.
+  whitelist.
+- Material metadata tools are not registered by Document MCP until their
+  cross-user permission model is confirmed.
 - Query/read tools are not report artifact tools. QA should summarize them as
   generic tool steps and must not create `reportArtifact` from
-  `document__list_*`, `document__get_material`, or `document__read_report_file`
-  results.
+  `document__list_*` or `document__read_report_file` results.
 
 ### P2 Candidates, Documented Only
 
@@ -312,6 +292,8 @@ These tools are intentionally not implemented by C-025:
 | Candidate tool | Purpose |
 | --- | --- |
 | `document__list_templates` | List report templates with optional type filter. |
+| `document__list_materials` | Query report materials after a cross-user permission model is confirmed. |
+| `document__get_material` | Read material metadata after a cross-user permission model is confirmed. |
 | `document__retry_job` | Retry a failed report generation job. |
 | `document__list_job_events` | List events for a report generation job. |
 | `document__retrieve_knowledge` | Retrieve report-oriented Knowledge snippets through Document retrieval settings. |

@@ -25,13 +25,16 @@ func TestListToolsExposesDocumentSchemas(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() failed: %v", err)
 	}
-	if len(result.Tools) != 16 {
-		t.Fatalf("ListTools returned %d tools, want 16", len(result.Tools))
+	if len(result.Tools) != 14 {
+		t.Fatalf("ListTools returned %d tools, want 14", len(result.Tools))
 	}
 
 	var exportTool *mcp.Tool
 	var contentTool *mcp.Tool
 	for i := range result.Tools {
+		if result.Tools[i].Name == "list_materials" || result.Tools[i].Name == "get_material" {
+			t.Fatalf("material metadata tool %q must not be exposed by MCP server", result.Tools[i].Name)
+		}
 		if result.Tools[i].Name == service.DocumentMCPToolExportReportDOCX {
 			exportTool = result.Tools[i]
 		}

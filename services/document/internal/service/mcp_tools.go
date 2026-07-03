@@ -27,8 +27,6 @@ const (
 	DocumentMCPToolGetReportResult           = "get_report_result"
 	DocumentMCPToolListReports               = "list_reports"
 	DocumentMCPToolGetReport                 = "get_report"
-	DocumentMCPToolListMaterials             = "list_materials"
-	DocumentMCPToolGetMaterial               = "get_material"
 	DocumentMCPToolListReportFiles           = "list_report_files"
 	DocumentMCPToolReadReportFile            = "read_report_file"
 	OperationDocumentMCPToolCall             = "document_mcp_tool_call"
@@ -49,8 +47,6 @@ const (
 // through to repositories or storage internals.
 type MCPDocumentService interface {
 	GetReportTemplateStructure(context.Context, RequestContext, string) (ReportTemplateStructure, error)
-	ListReportMaterials(context.Context, RequestContext, ReportMaterialListFilter) (ReportMaterialListResult, error)
-	GetReportMaterial(context.Context, RequestContext, string) (ReportMaterial, error)
 }
 
 type MCPJobService interface {
@@ -119,8 +115,6 @@ type MCPToolCallResult struct {
 	Job               *MCPReportJobSummary         `json:"job,omitempty"`
 	Report            *MCPReportSummary            `json:"report,omitempty"`
 	Reports           []MCPReportSummary           `json:"reports,omitempty"`
-	Material          *MCPReportMaterialSummary    `json:"material,omitempty"`
-	Materials         []MCPReportMaterialSummary   `json:"materials,omitempty"`
 	ReportFile        *MCPReportFileSummary        `json:"reportFile,omitempty"`
 	ReportFiles       []MCPReportFileSummary       `json:"reportFiles,omitempty"`
 	ReportFileContent *MCPReportFileContentSummary `json:"reportFileContent,omitempty"`
@@ -168,20 +162,6 @@ type MCPReportSummary struct {
 	UpdatedAt          string `json:"updatedAt,omitempty"`
 }
 
-type MCPReportMaterialSummary struct {
-	ID           string   `json:"id"`
-	MaterialName string   `json:"materialName,omitempty"`
-	MaterialType string   `json:"materialType,omitempty"`
-	Category     string   `json:"category,omitempty"`
-	Filename     string   `json:"filename,omitempty"`
-	FileSize     int64    `json:"fileSize,omitempty"`
-	Description  string   `json:"description,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
-	Enabled      bool     `json:"enabled"`
-	CreatedAt    string   `json:"createdAt,omitempty"`
-	UpdatedAt    string   `json:"updatedAt,omitempty"`
-}
-
 type MCPReportFileSummary struct {
 	ID          string `json:"id"`
 	ReportID    string `json:"reportId"`
@@ -223,8 +203,6 @@ func (s *MCPToolService) ListTools(context.Context) []MCPToolDefinition {
 		toolDefinition(DocumentMCPToolGetReportResult, "Read a safe report result summary.", requiredStringSchema("reportId", "Report ID.")),
 		toolDefinition(DocumentMCPToolListReports, "Query reports with optional type and status filters.", listReportsSchema()),
 		toolDefinition(DocumentMCPToolGetReport, "Read detailed metadata for a report.", requiredStringSchema("reportId", "Report ID.")),
-		toolDefinition(DocumentMCPToolListMaterials, "List report materials with optional category filter.", listMaterialsSchema()),
-		toolDefinition(DocumentMCPToolGetMaterial, "Read metadata for a report material.", requiredStringSchema("materialId", "Report material ID.")),
 		toolDefinition(DocumentMCPToolListReportFiles, "List generated report files for a report.", requiredStringSchema("reportId", "Report ID.")),
 		toolDefinition(DocumentMCPToolReadReportFile, "Read generated report file content as bounded text or markdown.", readReportFileSchema()),
 	}
@@ -269,10 +247,6 @@ func (s *MCPToolService) CallTool(ctx context.Context, reqCtx RequestContext, na
 		result = s.listReports(ctx, reqCtx, args)
 	case DocumentMCPToolGetReport:
 		result = s.getReport(ctx, reqCtx, args)
-	case DocumentMCPToolListMaterials:
-		result = s.listMaterials(ctx, reqCtx, args)
-	case DocumentMCPToolGetMaterial:
-		result = s.getMaterial(ctx, reqCtx, args)
 	case DocumentMCPToolListReportFiles:
 		result = s.listReportFiles(ctx, reqCtx, args)
 	case DocumentMCPToolReadReportFile:
@@ -668,74 +642,6 @@ func (s *MCPToolService) getReport(ctx context.Context, reqCtx RequestContext, a
 	return result
 }
 
-func (s *MCPToolService) listMaterials(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
-	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolListMaterials}
-	if s.documents == nil {
-		result.Status = documentMCPToolResultFailed
-		result.Error = toolErrorFromError(NewError(CodeDependency, "document service is not configured", nil))
-		s.recordToolCall(ctx, reqCtx, result, listMaterialsParameterSummary(args))
-		return result
-	}
-	page, pageSize, err := paginationArguments(args)
-	if err != nil {
-		result.Status = documentMCPToolResultFailed
-		result.Error = toolErrorFromError(err)
-		s.recordToolCall(ctx, reqCtx, result, listMaterialsParameterSummary(args))
-		return result
-	}
-	list, err := s.documents.ListReportMaterials(ctx, reqCtx, ReportMaterialListFilter{
-		Page:     page,
-		PageSize: pageSize,
-		Category: stringArgument(args, "category"),
-	})
-	if err != nil {
-		result.Status = documentMCPToolResultFailed
-		result.Error = toolErrorFromError(err)
-		s.recordToolCall(ctx, reqCtx, result, listMaterialsParameterSummary(args))
-		return result
-	}
-	result.Status = documentMCPToolResultSucceeded
-	result.Materials = materialSummaries(list.Items)
-	result.TotalCount = list.Page.Total
-	result.Page = list.Page.Page
-	result.PageSize = list.Page.PageSize
-	s.recordToolCall(ctx, reqCtx, result, map[string]any{
-		"category":    stringArgument(args, "category"),
-		"page":        result.Page,
-		"pageSize":    result.PageSize,
-		"resultCount": len(result.Materials),
-	})
-	return result
-}
-
-func (s *MCPToolService) getMaterial(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
-	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolGetMaterial}
-	if s.documents == nil {
-		result.Status = documentMCPToolResultFailed
-		result.Error = toolErrorFromError(NewError(CodeDependency, "document service is not configured", nil))
-		s.recordToolCall(ctx, reqCtx, result, map[string]any{"materialIdProvided": stringArgument(args, "materialId", "material_id") != ""})
-		return result
-	}
-	materialID := stringArgument(args, "materialId", "material_id")
-	if materialID == "" {
-		result.Status = documentMCPToolResultFailed
-		result.Error = toolErrorFromError(ValidationError(map[string]string{"materialId": "is required"}))
-		s.recordToolCall(ctx, reqCtx, result, map[string]any{"materialIdProvided": false})
-		return result
-	}
-	material, err := s.documents.GetReportMaterial(ctx, reqCtx, materialID)
-	if err != nil {
-		result.Status = documentMCPToolResultFailed
-		result.Error = toolErrorFromError(err)
-		s.recordToolCall(ctx, reqCtx, result, map[string]any{"materialId": materialID})
-		return result
-	}
-	result.Status = documentMCPToolResultSucceeded
-	result.Material = materialSummary(material)
-	s.recordToolCall(ctx, reqCtx, result, map[string]any{"materialId": material.ID})
-	return result
-}
-
 func (s *MCPToolService) listReportFiles(ctx context.Context, reqCtx RequestContext, args map[string]any) MCPToolCallResult {
 	result := MCPToolCallResult{RequestID: reqCtx.RequestID, ToolName: DocumentMCPToolListReportFiles}
 	if s.reportFiles == nil {
@@ -878,9 +784,6 @@ func mcpResultTarget(result MCPToolCallResult) (string, string) {
 	}
 	if result.Report != nil && result.Report.ID != "" {
 		return "report", result.Report.ID
-	}
-	if result.Material != nil && result.Material.ID != "" {
-		return "material", result.Material.ID
 	}
 	if result.TemplateSchema != nil && result.TemplateSchema.TemplateID != "" {
 		return "report_template", result.TemplateSchema.TemplateID
@@ -1059,35 +962,6 @@ func reportSummary(report Report) *MCPReportSummary {
 		GeneratedAt:        formatMCPTimePtr(report.GeneratedAt),
 		ExportedAt:         formatMCPTimePtr(report.ExportedAt),
 		UpdatedAt:          formatMCPTime(report.UpdatedAt),
-	}
-}
-
-func materialSummaries(materials []ReportMaterial) []MCPReportMaterialSummary {
-	if len(materials) == 0 {
-		return []MCPReportMaterialSummary{}
-	}
-	result := make([]MCPReportMaterialSummary, 0, len(materials))
-	for _, material := range materials {
-		if summary := materialSummary(material); summary != nil {
-			result = append(result, *summary)
-		}
-	}
-	return result
-}
-
-func materialSummary(material ReportMaterial) *MCPReportMaterialSummary {
-	return &MCPReportMaterialSummary{
-		ID:           material.ID,
-		MaterialName: material.MaterialName,
-		MaterialType: material.MaterialType,
-		Category:     material.Category,
-		Filename:     material.Filename,
-		FileSize:     material.FileSize,
-		Description:  material.Description,
-		Tags:         append([]string(nil), material.Tags...),
-		Enabled:      material.Enabled,
-		CreatedAt:    formatMCPTime(material.CreatedAt),
-		UpdatedAt:    formatMCPTime(material.UpdatedAt),
 	}
 }
 
@@ -1557,14 +1431,6 @@ func listReportsSchema() map[string]any {
 		"status":     map[string]any{"type": "string", "enum": []any{string(ReportStatusDraft), string(ReportStatusOutlineGenerating), string(ReportStatusOutlineGenerated), string(ReportStatusContentGenerating), string(ReportStatusGenerated), string(ReportStatusExporting), string(ReportStatusExported), string(ReportStatusFailed)}},
 		"page":       map[string]any{"type": "integer", "minimum": 1, "default": DefaultPage},
 		"pageSize":   map[string]any{"type": "integer", "minimum": 1, "maximum": MaxPageSize, "default": DefaultPageSize},
-	})
-}
-
-func listMaterialsSchema() map[string]any {
-	return objectSchema(nil, map[string]any{
-		"category": map[string]any{"type": "string", "description": "Optional material category filter."},
-		"page":     map[string]any{"type": "integer", "minimum": 1, "default": DefaultPage},
-		"pageSize": map[string]any{"type": "integer", "minimum": 1, "maximum": MaxPageSize, "default": DefaultPageSize},
 	})
 }
 
