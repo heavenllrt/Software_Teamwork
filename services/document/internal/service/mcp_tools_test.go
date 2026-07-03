@@ -1,6 +1,8 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -784,6 +786,33 @@ func TestMCPToolServiceListReportFilesAndReadDOCXText(t *testing.T) {
 	}
 }
 
+func TestMCPToolServiceReadLargeDOCXExtractsTextBeforeContentCap(t *testing.T) {
+	docx := largeDOCXWithText(t, "large report summary")
+	if len(docx) <= documentMCPMaxReportFileContentBytes {
+		t.Fatalf("test DOCX size=%d, want larger than content cap", len(docx))
+	}
+	files := &fakeMCPReportFileService{
+		readContent: FileContent{
+			Filename: "large.docx", ContentType: docxContentType, SizeBytes: int64(len(docx)),
+			Content: io.NopCloser(bytes.NewReader(docx)),
+		},
+	}
+	svc := NewMCPToolService(MCPToolServiceConfig{ReportFileSvc: files, Recorder: &fakeMCPOperationRecorder{}})
+
+	result := svc.CallTool(context.Background(), RequestContext{UserID: "user-1", RequestID: "req-large-docx"},
+		DocumentMCPToolReadReportFile, json.RawMessage(`{"reportFileId":"rf-large","format":"text"}`))
+
+	if result.Status != documentMCPToolResultSucceeded || result.ReportFileContent == nil {
+		t.Fatalf("read large DOCX result = %+v, want success", result)
+	}
+	if !strings.Contains(result.ReportFileContent.Content, "large report summary") {
+		t.Fatalf("extracted content = %q, want DOCX text", result.ReportFileContent.Content)
+	}
+	if result.ReportFileContent.Truncated {
+		t.Fatalf("result marked truncated for small extracted text: %+v", result.ReportFileContent)
+	}
+}
+
 func TestMCPToolServiceReadReportFileValidationAndUnsupportedContent(t *testing.T) {
 	svc := NewMCPToolService(MCPToolServiceConfig{
 		ReportFileSvc: &fakeMCPReportFileService{
@@ -810,6 +839,33 @@ func TestMCPToolServiceReadReportFileValidationAndUnsupportedContent(t *testing.
 	if unsupported.Status != documentMCPToolResultFailed || unsupported.Error == nil || unsupported.Error.Code != string(CodeConflict) {
 		t.Fatalf("unsupported content result = %+v", unsupported)
 	}
+}
+
+func largeDOCXWithText(t *testing.T, text string) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	writer := zip.NewWriter(&buffer)
+	document, err := writer.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := document.Write([]byte(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>` + text + `</w:t></w:r></w:p></w:body></w:document>`)); err != nil {
+		t.Fatal(err)
+	}
+	padding, err := writer.CreateHeader(&zip.FileHeader{
+		Name:   "word/media/padding.bin",
+		Method: zip.Store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := padding.Write(bytes.Repeat([]byte("x"), documentMCPMaxReportFileContentBytes+1024)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
 }
 
 func assertSchemaRequires(t *testing.T, schema map[string]any, fields ...string) {

@@ -41,6 +41,7 @@ const (
 	documentMCPDefaultContentReportType      = "summer_peak_inspection"
 	documentMCPMaxSourceContentBytes         = 20_000
 	documentMCPMaxReportFileContentBytes     = 1 << 20
+	documentMCPMaxReportFileRawBytes         = 32 << 20
 )
 
 // MCPDocumentService is the subset of the Document metadata service used by
@@ -1174,36 +1175,56 @@ func readSafeReportFileText(content FileContent) (string, bool, error) {
 	if content.Content == nil {
 		return "", false, NewError(CodeDependency, "report file content is not available", nil)
 	}
-	raw, err := io.ReadAll(io.LimitReader(content.Content, documentMCPMaxReportFileContentBytes+1))
+	contentType := strings.ToLower(strings.TrimSpace(content.ContentType))
+	if isTextReportFileContent(contentType) {
+		raw, truncated, err := readBoundedReportFileBytes(content.Content, documentMCPMaxReportFileContentBytes)
+		if err != nil {
+			return "", false, dependencyError("read report file content", err)
+		}
+		return sanitizeReportFileText(string(raw), truncated)
+	}
+
+	raw, rawTruncated, err := readBoundedReportFileBytes(content.Content, documentMCPMaxReportFileRawBytes)
 	if err != nil {
 		return "", false, dependencyError("read report file content", err)
 	}
-	truncated := len(raw) > documentMCPMaxReportFileContentBytes
-	if truncated {
-		raw = raw[:documentMCPMaxReportFileContentBytes]
+	if rawTruncated {
+		return "", false, NewError(CodeConflict, "report file content is too large to read as text", nil)
 	}
-	text, err := extractReportFileText(raw, content.ContentType)
+	text, err := extractDOCXText(raw)
 	if err != nil {
-		return "", false, err
+		return "", false, NewError(CodeConflict, "report file content is not readable as text", err)
 	}
+	return sanitizeReportFileText(text, false)
+}
+
+func readBoundedReportFileBytes(reader io.Reader, limit int) ([]byte, bool, error) {
+	raw, err := io.ReadAll(io.LimitReader(reader, int64(limit)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(raw) > limit
+	if truncated {
+		raw = raw[:limit]
+	}
+	return raw, truncated, nil
+}
+
+func sanitizeReportFileText(text string, truncated bool) (string, bool, error) {
 	text = strings.TrimSpace(strings.ToValidUTF8(text, ""))
 	text = redactSourceContentFragments(text)
+	if bounded, didTruncate := truncateUTF8ByBytes(text, documentMCPMaxReportFileContentBytes); didTruncate {
+		text = strings.TrimSpace(bounded)
+		truncated = true
+	}
 	return text, truncated, nil
 }
 
-func extractReportFileText(raw []byte, contentType string) (string, error) {
-	if len(raw) == 0 {
-		return "", nil
-	}
-	contentType = strings.ToLower(strings.TrimSpace(contentType))
+func isTextReportFileContent(contentType string) bool {
 	if strings.Contains(contentType, "markdown") || strings.HasPrefix(contentType, "text/") {
-		return string(raw), nil
+		return true
 	}
-	text, err := extractDOCXText(raw)
-	if err == nil {
-		return text, nil
-	}
-	return "", NewError(CodeConflict, "report file content is not readable as text", err)
+	return false
 }
 
 func extractDOCXText(raw []byte) (string, error) {
@@ -1263,7 +1284,7 @@ func extractWordDocumentText(reader io.Reader) (string, error) {
 			needsSpace = true
 		}
 		if builder.Len() > documentMCPMaxReportFileContentBytes {
-			return builder.String()[:documentMCPMaxReportFileContentBytes], nil
+			return builder.String(), nil
 		}
 	}
 	return compactReportFileText(builder.String()), nil
