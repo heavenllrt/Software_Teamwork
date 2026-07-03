@@ -296,10 +296,14 @@ Unsupported binary content returns a stable tool error instead of binary data.
 - Query/read tools reuse the Document service layer and its permission checks.
 - Tool results are sanitized and do not expose service tokens, provider errors,
   prompts, `fileRef`, object keys, storage URLs, buckets, or internal URLs.
-- QA enables these tools in the default tool whitelist, but they are not report
-  artifact tools. QA should summarize them as generic tool steps and must not
-  create `reportArtifact` from `document__list_*`, `document__get_material`, or
-  `document__read_report_file` results.
+- QA enables the report and report-file query tools in the default tool
+  whitelist. Material metadata tools (`document__list_materials` and
+  `document__get_material`) remain opt-in until their cross-user permission
+  model is confirmed.
+- Query/read tools are not report artifact tools. QA should summarize them as
+  generic tool steps and must not create `reportArtifact` from
+  `document__list_*`, `document__get_material`, or `document__read_report_file`
+  results.
 
 ### P2 Candidates, Documented Only
 

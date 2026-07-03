@@ -149,6 +149,12 @@ func TestDefaultDocumentReportToolsArePolicyVisibleSubset(t *testing.T) {
 	if _, ok := visible[defaultDocumentToolAlias+"__"+ToolGetTemplateSchema]; ok {
 		t.Fatalf("template schema tool should not be visible in the default whitelist")
 	}
+	if _, ok := visible[defaultDocumentToolAlias+"__"+ToolListMaterials]; ok {
+		t.Fatalf("material list tool should not be visible in the default whitelist")
+	}
+	if _, ok := visible[defaultDocumentToolAlias+"__"+ToolGetMaterial]; ok {
+		t.Fatalf("material detail tool should not be visible in the default whitelist")
+	}
 }
 
 func fmtSprint(value any) string {

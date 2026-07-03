@@ -37,8 +37,6 @@ func TestMigrationsEnableDocumentReportToolsForUntouchedSystemDefault(t *testing
 		"document__get_report_result",
 		"document__list_reports",
 		"document__get_report",
-		"document__list_materials",
-		"document__get_material",
 		"document__list_report_files",
 		"document__read_report_file",
 	}
@@ -49,5 +47,16 @@ func TestMigrationsEnableDocumentReportToolsForUntouchedSystemDefault(t *testing
 	}
 	if strings.Contains(content, "created_by_user_id <>") || strings.Contains(content, "created_by_user_id !=") {
 		t.Fatalf("document report tool migration must not update user-created configs:\n%s", content)
+	}
+	forbidden := []string{
+		`enabled_tool_names || '["document__list_reports", "document__get_report", "document__list_materials"`,
+		`enabled_tool_names || '["document__list_materials"`,
+		`- 'document__list_materials'`,
+		`- 'document__get_material'`,
+	}
+	for _, token := range forbidden {
+		if strings.Contains(content, token) {
+			t.Fatalf("material metadata tools must stay out of default migration; found %q\n%s", token, content)
+		}
 	}
 }

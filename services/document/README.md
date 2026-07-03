@@ -167,6 +167,11 @@ extracts DOCX text from `word/document.xml`, caps returned content at 1 MiB,
 and never returns raw DOCX bytes, File Service internal references, object keys,
 storage URLs, or service tokens.
 
+QA defaults enable the report and report-file query tools only. Material
+metadata tools remain available from Document MCP for explicit opt-in
+configurations, but they are not in the default QA whitelist until their
+cross-user permission model is confirmed.
+
 ## Migrations
 
 Migration files live in `migrations/` and are applied with the project-pinned `goose@v3.27.1` command.

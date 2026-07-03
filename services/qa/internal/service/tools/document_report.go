@@ -49,8 +49,6 @@ var DefaultDocumentReportToolNames = []string{
 	defaultDocumentToolAlias + "__" + ToolGetReportResult,
 	defaultDocumentToolAlias + "__" + ToolListReports,
 	defaultDocumentToolAlias + "__" + ToolGetReport,
-	defaultDocumentToolAlias + "__" + ToolListMaterials,
-	defaultDocumentToolAlias + "__" + ToolGetMaterial,
 	defaultDocumentToolAlias + "__" + ToolListReportFiles,
 	defaultDocumentToolAlias + "__" + ToolReadReportFile,
 }

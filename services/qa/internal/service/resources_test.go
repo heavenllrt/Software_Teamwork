@@ -25,6 +25,9 @@ func TestDefaultAgentConfigEnablesAttachmentSearch(t *testing.T) {
 	if !containsString(config.EnabledToolNames, "document__read_report_file") {
 		t.Fatalf("enabledToolNames=%v, want document__read_report_file", config.EnabledToolNames)
 	}
+	if containsString(config.EnabledToolNames, "document__list_materials") || containsString(config.EnabledToolNames, "document__get_material") {
+		t.Fatalf("enabledToolNames=%v, material metadata tools must stay opt-in", config.EnabledToolNames)
+	}
 }
 
 func TestReportGenerationDirectiveMentionsContentReportTool(t *testing.T) {

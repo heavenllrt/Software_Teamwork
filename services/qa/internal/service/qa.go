@@ -877,7 +877,7 @@ func requestDirective(input AskInput) string {
 		parts = append(parts, "The requested QA mode is "+input.Mode+".")
 	}
 	if input.Mode == "report_generation" {
-		parts = append(parts, "For report generation, use search_session_attachments with include_report_source=true when the user uploaded files, then pass report_source_excerpt as content to document__generate_report_from_content. You may also call available Document report tools such as document__list_reports, document__get_report, document__list_materials, document__get_material, document__list_report_files, document__read_report_file, document__generate_report_outline, document__generate_report_text, document__get_generation_status, document__export_report_docx, and document__get_report_result. Treat accepted, pending, or running jobs as asynchronous work and avoid long blocking waits.")
+		parts = append(parts, "For report generation, use search_session_attachments with include_report_source=true when the user uploaded files, then pass report_source_excerpt as content to document__generate_report_from_content. You may also call available Document report tools such as document__list_reports, document__get_report, document__list_report_files, document__read_report_file, document__generate_report_outline, document__generate_report_text, document__get_generation_status, document__export_report_docx, and document__get_report_result. Treat accepted, pending, or running jobs as asynchronous work and avoid long blocking waits.")
 	}
 	if len(input.KnowledgeBaseIDs) > 0 {
 		parts = append(parts, "When a knowledge tool supports knowledge-base filtering, restrict it to: "+strings.Join(input.KnowledgeBaseIDs, ", ")+".")
